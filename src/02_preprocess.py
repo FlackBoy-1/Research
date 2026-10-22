@@ -2,6 +2,13 @@ import pandas as pd
 import re
 import pymorphy3
 
+import os
+# Определяем корневую папку проекта (на уровень выше src)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(BASE_DIR, 'data')
+MODELS_DIR = os.path.join(BASE_DIR, 'models')
+PLOTS_DIR = os.path.join(BASE_DIR, 'plots')
+
 # 1. Инициализация морфологического анализатора
 morph = pymorphy3.MorphAnalyzer()
 

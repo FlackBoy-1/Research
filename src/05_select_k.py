@@ -7,6 +7,13 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import cross_val_predict
 from scipy.linalg import norm
 
+import os
+# Определяем корневую папку проекта (на уровень выше src)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(BASE_DIR, 'data')
+MODELS_DIR = os.path.join(BASE_DIR, 'models')
+PLOTS_DIR = os.path.join(BASE_DIR, 'plots')
+
 # 1. Загружаем данные
 with open('matrix_x.pkl', 'rb') as f:
     X = pickle.load(f)

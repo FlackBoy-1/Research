@@ -3,6 +3,13 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
 import pickle
 
+import os
+# Определяем корневую папку проекта (на уровень выше src)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(BASE_DIR, 'data')
+MODELS_DIR = os.path.join(BASE_DIR, 'models')
+PLOTS_DIR = os.path.join(BASE_DIR, 'plots')
+
 # 1. Загружаем стоп-слова из файлов
 def load_words(filename):
     with open(filename, 'r', encoding='utf-8') as f:
