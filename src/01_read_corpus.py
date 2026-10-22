@@ -1,11 +1,8 @@
 import pandas as pd
 import os
 
-# Определяем корневую папку проекта (на уровень выше src)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
-MODELS_DIR = os.path.join(BASE_DIR, 'models')
-PLOTS_DIR = os.path.join(BASE_DIR, 'plots')
 
 # Читаем файл из папки data
 df = pd.read_csv(
@@ -19,3 +16,11 @@ print(df.head())
 
 print("\n--- Информация о таблице ---")
 print(df.info())
+
+# Проверка наличия case_id
+if 'case_id' in df.columns:
+    print(f"\n[+] Столбец case_id найден.")
+    print(f"Всего строк: {len(df)}")
+    print(f"Уникальных сценариев (case_id): {df['case_id'].nunique()}")
+else:
+    print("\n[!] ВНИМАНИЕ: Столбец case_id не найден! Группировка при валидации работать не будет.")

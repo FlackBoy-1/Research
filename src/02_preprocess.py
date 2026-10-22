@@ -33,5 +33,12 @@ for i in range(5):
     print(f"  Очищено:  {df['clean_text'][i]}")
     print(f"  Леммы:    {df['lemmas'][i]}\n")
 
+# Статистика по сценариям для журнала
+if 'case_id' in df.columns:
+    print(f"--- Статистика корпуса ---")
+    print(f"Всего сообщений: {len(df)}")
+    print(f"Уникальных сценариев (case_id): {df['case_id'].nunique()}")
+    print(f"(Помни: число сообщений не равно числу независимых сценариев)")
+
 df.to_csv(os.path.join(DATA_DIR, 'corpus_preprocessed.csv'), sep=';', index=False, encoding='utf-8-sig')
 print("\nРезультат сохранен в data/corpus_preprocessed.csv")
