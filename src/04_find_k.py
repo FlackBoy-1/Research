@@ -54,7 +54,7 @@ for k in k_range:
     silhouettes.append(sil)
     
     try:
-        clf = LogisticRegression(max_iter=1000, random_state=42)
+        clf = LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced')
         y_pred = cross_val_predict(clf, X_lsa, y_intent, cv=5)
         f1 = f1_score(y_intent, y_pred, average='macro', zero_division=0)
     except:

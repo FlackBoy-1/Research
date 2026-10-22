@@ -9,7 +9,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import cross_val_predict
 import os
 from datetime import datetime
-
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -29,7 +28,14 @@ stop_words = load_words(os.path.join(DATA_DIR, 'stop_words.txt'))
 keep_words = load_words(os.path.join(DATA_DIR, 'keep_words.txt'))
 final_stop_words = [word for word in stop_words if word not in keep_words]
 
-K_STAR = 24 
+# ЧИТАЕМ k* ИЗ ФАЙЛА
+try:
+    with open(os.path.join(DATA_DIR, 'best_k.txt'), 'r') as f:
+        K_STAR = int(f.read().strip())
+    print(f"Автоматически загружен k* = {K_STAR} из файла.")
+except:
+    K_STAR = 24
+    print("Файл best_k.txt не найден. Используем k*=24 по умолчанию.")
 
 plot_dir = os.path.join(PLOTS_DIR, 'v_analysis')
 os.makedirs(plot_dir, exist_ok=True)
@@ -40,6 +46,10 @@ thresholds = []
 current_min_df = 1
 
 print(f"Запуск поиска V* при фиксированном k*={K_STAR}...")
+
+# ... дальше идет твой старый цикл while True, 
+# но внутри него не забудь добавить class_weight='balanced':
+# clf = LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced')
 
 while True:
     vectorizer = TfidfVectorizer(
