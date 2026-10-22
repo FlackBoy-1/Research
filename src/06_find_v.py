@@ -80,69 +80,30 @@ for current_min_df in range(1, 11):
     f1_scores.append(f1)
     print(f"min_df={current_min_df} (слов: {vocab_size}): F1 = {f1:.3f}")
 
-# --- УМНЫЙ ВЫБОР V* ---
+# --- УМНЫЙ ВЫБОР V* (Компромисс между F1 и сжатием) ---
 max_f1 = max(f1_scores)
-threshold_90 = max_f1 * 0.90
+tolerance = 0.01 # Допустимая потеря качества (1%)
 
-# Отбираем индексы, где F1 не упал ниже 90% от максимума
-valid_indices = [i for i, f1 in enumerate(f1_scores) if f1 >= threshold_90]
+# Находим точки, где F1 не упал больше, чем на 1%
+valid_indices = [i for i, f1 in enumerate(f1_scores) if f1 >= (max_f1 - tolerance)]
 
-# Берем отфильтрованные массивы для поиска локтя
-valid_vocab = [vocab_sizes[i] for i in valid_indices]
-valid_f1 = [f1_scores[i] for i in valid_indices]
-valid_mindf = [thresholds[i] for i in valid_indices]
+# Из этих точек выбираем ту, где словарь МИНИМАЛЕН (то есть максимальный min_df)
+# Так как valid_indices отсортирован по возрастанию min_df, 
+# самая правая точка в этом списке даст нам минимальный словарь!
+best_idx = valid_indices[-1]
 
-print(f"\nЗеленая зона (F1 >= {threshold_90:.3f}):")
-for i in valid_indices:
-    print(f"  min_df={thresholds[i]} (слов: {vocab_sizes[i]}) -> F1 = {f1_scores[i]:.3f}")
+best_min_df = thresholds[best_idx]
+best_vocab_size = vocab_sizes[best_idx]
+best_f1 = f1_scores[best_idx]
 
-# Ищем колено на отфильтрованных данных (direction='decreasing', так как словарь уменьшается, а F1 падает)
-knee = KneeLocator(valid_vocab, valid_f1, curve='concave', direction='decreasing').elbow
-
-if knee:
-    # Находим индекс этого колена в исходном массиве
-    best_vocab_size = knee
-    best_idx = vocab_sizes.index(best_vocab_size)
-    best_min_df = thresholds[best_idx]
-    best_f1 = f1_scores[best_idx]
-    print(f"\n[+] Найдено 'колено' на графике в зеленой зоне: словарь = {best_vocab_size}")
-else:
-    # Если колено не найдено (например, график слишком гладкий), берем точку с максимальным F1
-    print("\n[!] Колено не найдено. Берем точку с максимальным F1.")
-    best_idx = np.argmax(f1_scores)
-    best_min_df = thresholds[best_idx]
-    best_vocab_size = vocab_sizes[best_idx]
-    best_f1 = f1_scores[best_idx]
-
-print(f"\n[РЕЗУЛЬТАТ]")
-print(f"min_df = {best_min_df}")
-print(f"Размер словаря (V*) = {best_vocab_size}")
-print(f"F1 = {best_f1:.3f}")
+print(f"\n[+] Максимальный F1 = {max_f1:.3f}")
+print(f"[+] Допустимая просадка (tolerance) = {tolerance}")
+print(f"[+] Найдена оптимальная точка (макс. сжатие при потере F1 не более 1%):")
+print(f"    min_df = {best_min_df}")
+print(f"    Размер словаря (V*) = {best_vocab_size}")
+print(f"    F1 = {best_f1:.3f}")
 
 with open(os.path.join(DATA_DIR, 'best_min_df.txt'), 'w') as f:
     f.write(str(best_min_df))
 with open(os.path.join(DATA_DIR, 'best_v.txt'), 'w') as f:
     f.write(str(best_vocab_size))
-
-# Построение графика
-fig, ax1 = plt.subplots(figsize=(10, 6))
-color = 'tab:blue'
-ax1.set_xlabel('Размер словаря (количество слов и биграмм)')
-ax1.set_ylabel('Macro F1-Score', color=color)
-ax1.plot(vocab_sizes, f1_scores, color=color, marker='o', linewidth=2)
-ax1.tick_params(axis='y', labelcolor=color)
-
-ax1.scatter([best_vocab_size], [best_f1], color='red', s=100, zorder=5, label=f'V* = {best_vocab_size}')
-ax1.legend()
-
-for i in range(len(thresholds)):
-    ax1.annotate(f'min_df={thresholds[i]}', (vocab_sizes[i], f1_scores[i]), textcoords="offset points", xytext=(0,10), ha='center')
-
-plt.title(f'Зависимость F1 от размера словаря (V)\nСтрок: {num_rows} | k* = {K_STAR}', fontsize=14)
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-
-timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-filename = os.path.join(plot_dir, f'metrics_vs_vocab_rows{num_rows}_k{K_STAR}_{timestamp}.png')
-plt.savefig(filename, dpi=300)
-print(f"\nГрафик сохранен в {filename}")
