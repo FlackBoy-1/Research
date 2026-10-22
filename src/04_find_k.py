@@ -11,29 +11,25 @@ from kneed import KneeLocator
 import os
 from datetime import datetime
 
-import os
-# Определяем корневую папку проекта (на уровень выше src)
+import warnings
+warnings.filterwarnings('ignore')
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
-MODELS_DIR = os.path.join(BASE_DIR, 'models')
 PLOTS_DIR = os.path.join(BASE_DIR, 'plots')
 
-# 1. Загружаем данные
-with open('matrix_x.pkl', 'rb') as f:
+with open(os.path.join(DATA_DIR, 'matrix_x.pkl'), 'rb') as f:
     X = pickle.load(f)
-df = pd.read_csv('corpus_preprocessed.csv', sep=';', encoding='utf-8-sig')
+df = pd.read_csv(os.path.join(DATA_DIR, 'corpus_preprocessed.csv'), sep=';', encoding='utf-8-sig')
 
 y_category = df['category']
 y_intent = df['intent']
 num_rows = len(df)
-num_features = X.shape[1] # Сколько всего слов в словаре
+num_features = X.shape[1]
 
-# Создаем отдельную папку для графиков k
-plot_dir = 'plots/k_analysis'
+plot_dir = os.path.join(PLOTS_DIR, 'k_analysis')
 os.makedirs(plot_dir, exist_ok=True)
 
-# ДИНАМИЧЕСКИЙ диапазон k: от 2 до максимума, но не больше 100 (чтобы не ждать вечно на больших данных)
-# Максимум компонент не может превышать количество признаков (слов) или количество строк минус 1
 max_possible_k = min(num_features, num_rows - 1, 100) 
 k_range = range(2, max_possible_k + 1)
 
@@ -47,19 +43,16 @@ for k in k_range:
     svd = TruncatedSVD(n_components=k, random_state=42)
     X_lsa = svd.fit_transform(X)
     
-    # 1. Reconstruction Error
     X_reconstructed = svd.inverse_transform(X_lsa)
     error = norm(X - X_reconstructed, 'fro')
     recon_errors.append(error)
     
-    # 2. Silhouette Score
     try:
         sil = silhouette_score(X_lsa, y_category)
     except:
         sil = 0
     silhouettes.append(sil)
     
-    # 3. Macro F1-Score
     try:
         clf = LogisticRegression(max_iter=1000, random_state=42)
         y_pred = cross_val_predict(clf, X_lsa, y_intent, cv=5)
@@ -68,7 +61,6 @@ for k in k_range:
         f1 = 0
     f1_scores.append(f1)
 
-# Поиск локтей
 knee_error = KneeLocator(k_range, recon_errors, curve='convex', direction='decreasing').elbow
 knee_sil = KneeLocator(k_range, silhouettes, curve='concave', direction='increasing').elbow
 knee_f1 = KneeLocator(k_range, f1_scores, curve='concave', direction='increasing').elbow
@@ -78,7 +70,6 @@ print(f"Локоть Reconstruction Error: k = {knee_error}")
 print(f"Локоть Silhouette Score:     k = {knee_sil}")
 print(f"Локоть F1-Score:             k = {knee_f1}")
 
-# Визуализация
 fig, ax1 = plt.subplots(figsize=(12, 7))
 color = 'tab:red'
 ax1.set_xlabel('Количество компонент (k)')
@@ -104,7 +95,7 @@ ax2.legend(lines1 + lines2, labels1 + labels2, loc='center right')
 plt.tight_layout()
 
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-filename = f'{plot_dir}/metrics_rows{num_rows}_k2-{max_possible_k}_{timestamp}.png'
+filename = os.path.join(plot_dir, f'metrics_rows{num_rows}_k2-{max_possible_k}_{timestamp}.png')
 plt.savefig(filename, dpi=300)
 print(f"\nГрафик сохранен в {filename}")
-plt.show()
+#plt.show()

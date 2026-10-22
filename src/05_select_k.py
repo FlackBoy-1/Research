@@ -6,22 +6,20 @@ from sklearn.metrics import silhouette_score, f1_score
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import cross_val_predict
 from scipy.linalg import norm
-
 import os
-# Определяем корневую папку проекта (на уровень выше src)
+
+import warnings
+warnings.filterwarnings('ignore')
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
-MODELS_DIR = os.path.join(BASE_DIR, 'models')
-PLOTS_DIR = os.path.join(BASE_DIR, 'plots')
 
-# 1. Загружаем данные
-with open('matrix_x.pkl', 'rb') as f:
+with open(os.path.join(DATA_DIR, 'matrix_x.pkl'), 'rb') as f:
     X = pickle.load(f)
-df = pd.read_csv('corpus_preprocessed.csv', sep=';', encoding='utf-8-sig')
+df = pd.read_csv(os.path.join(DATA_DIR, 'corpus_preprocessed.csv'), sep=';', encoding='utf-8-sig')
 y_category = df['category']
 y_intent = df['intent']
 
-# (Мы заново считаем метрики, чтобы не сохранять их в файл)
 k_range = range(2, 46)
 recon_errors = []
 silhouettes = []
@@ -46,20 +44,15 @@ for k in k_range:
     f1 = f1_score(y_intent, y_pred, average='macro', zero_division=0)
     f1_scores.append(f1)
 
-# 2. Применяем правило из journal.md
-# Находим k с максимальным F1
 max_f1_idx = np.argmax(f1_scores)
 k_star_candidate = k_range[max_f1_idx]
 max_f1_val = f1_scores[max_f1_idx]
 
 print(f"\nЛучший F1 достигается при k = {k_star_candidate} (F1 = {max_f1_val:.3f})")
 
-# Проверка: ошибка восстановления не должна быть больше минимума более чем на 5%
 min_error = min(recon_errors)
 min_error_idx = recon_errors.index(min_error)
 candidate_error = recon_errors[max_f1_idx]
-
-# Считаем, на сколько процентов ошибка при k* больше минимальной
 error_increase_pct = ((candidate_error - min_error) / min_error) * 100
 candidate_sil = silhouettes[max_f1_idx]
 
@@ -73,7 +66,6 @@ if error_increase_pct <= 5.0:
 else:
     print("  ❌ Условие по ошибке НЕ выполнено (ошибка выросла слишком сильно).")
 
-# Проверка силуэта (не ниже 0.1)
 print(f"\nПроверка силуэта (должен быть >= 0.1):")
 print(f"  Силуэт при k={k_star_candidate}: {candidate_sil:.3f}")
 if candidate_sil >= 0.1:
@@ -81,7 +73,6 @@ if candidate_sil >= 0.1:
 else:
     print("  ❌ Условие по силуэту НЕ выполнено (классы перемешаны).")
 
-# Выносим финальный вердикт
 print("\n--- ИТОГОВЫЙ ВЕРДИКТ ---")
 if candidate_sil >= 0.1 and error_increase_pct <= 5.0:
     print(f"Выбран k* = {k_star_candidate} (прошел все проверки).")

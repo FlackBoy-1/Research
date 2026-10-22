@@ -10,14 +10,14 @@ from sklearn.model_selection import cross_val_predict
 import os
 from datetime import datetime
 
-import os
-# Определяем корневую папку проекта (на уровень выше src)
+import warnings
+warnings.filterwarnings('ignore')
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
-MODELS_DIR = os.path.join(BASE_DIR, 'models')
 PLOTS_DIR = os.path.join(BASE_DIR, 'plots')
 
-df = pd.read_csv('corpus_preprocessed.csv', sep=';', encoding='utf-8-sig')
+df = pd.read_csv(os.path.join(DATA_DIR, 'corpus_preprocessed.csv'), sep=';', encoding='utf-8-sig')
 y_intent = df['intent']
 num_rows = len(df)
 
@@ -25,14 +25,13 @@ def load_words(filename):
     with open(filename, 'r', encoding='utf-8') as f:
         return [line.strip() for line in f if line.strip()]
 
-stop_words = load_words('stop_words.txt')
-keep_words = load_words('keep_words.txt')
+stop_words = load_words(os.path.join(DATA_DIR, 'stop_words.txt'))
+keep_words = load_words(os.path.join(DATA_DIR, 'keep_words.txt'))
 final_stop_words = [word for word in stop_words if word not in keep_words]
 
 K_STAR = 24 
 
-# Создаем отдельную папку для графиков V
-plot_dir = 'plots/v_analysis'
+plot_dir = os.path.join(PLOTS_DIR, 'v_analysis')
 os.makedirs(plot_dir, exist_ok=True)
 
 vocab_sizes = []
@@ -42,7 +41,6 @@ current_min_df = 1
 
 print(f"Запуск поиска V* при фиксированном k*={K_STAR}...")
 
-# ДИНАМИЧЕСКИЙ перебор min_df
 while True:
     vectorizer = TfidfVectorizer(
         ngram_range=(1, 2), 
@@ -55,7 +53,6 @@ while True:
         X = vectorizer.fit_transform(df['lemmas'])
         vocab_size = X.shape[1]
     except ValueError:
-        # Если слов не осталось, прерываем цикл
         print(f"\nПри min_df={current_min_df} не осталось слов. Останавливаемся.")
         break
         
@@ -66,7 +63,6 @@ while True:
     thresholds.append(current_min_df)
     vocab_sizes.append(vocab_size)
     
-    # Ограничиваем k, если слов меньше, чем K_STAR
     current_k = min(K_STAR, vocab_size)
     svd = TruncatedSVD(n_components=current_k, random_state=42)
     X_lsa = svd.fit_transform(X)
@@ -83,7 +79,6 @@ while True:
     print(f"min_df={current_min_df} (слов: {vocab_size}, осей: {current_k}): F1 = {f1:.3f}")
     current_min_df += 1
 
-# Строим график
 fig, ax1 = plt.subplots(figsize=(10, 6))
 color = 'tab:blue'
 ax1.set_xlabel('Размер словаря (количество слов и биграмм)')
@@ -98,7 +93,7 @@ plt.title(f'Зависимость F1 от размера словаря (V)\nС
 plt.grid(True, alpha=0.3)
 
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-filename = f'{plot_dir}/metrics_vs_vocab_rows{num_rows}_k{K_STAR}_{timestamp}.png'
+filename = os.path.join(plot_dir, f'metrics_vs_vocab_rows{num_rows}_k{K_STAR}_{timestamp}.png')
 plt.savefig(filename, dpi=300)
 print(f"\nГрафик сохранен в {filename}")
-plt.show()
+#plt.show()
