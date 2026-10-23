@@ -33,7 +33,7 @@ num_features = X.shape[1]
 plot_dir = os.path.join(PLOTS_DIR, 'k_analysis')
 os.makedirs(plot_dir, exist_ok=True)
 
-max_possible_k = min(num_features, num_rows - 1, 100) 
+max_possible_k = min(num_features, num_rows - 1, 120) 
 k_range = range(2, max_possible_k + 1)
 
 recon_errors = []
