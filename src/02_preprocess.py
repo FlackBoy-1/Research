@@ -6,21 +6,53 @@ import os
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 
+# ============================================================
+# НАСТРОЙКИ ОБРАБОТКИ
+# ============================================================
+USE_LATIN = True  # Поставь False, если латиница начнет мешать
+# ============================================================
+
 morph = pymorphy3.MorphAnalyzer()
 
 def clean_text(text):
     text = str(text).lower()
-    text = re.sub(r'[^а-яё\s.,]', '', text)
+    
+    # 1. Поиск координат (до удаления цифр)
+    # Ищем числа с точками/запятыми (например 45.123, 38.456) или градусы/минуты
+    text = re.sub(r'\b\d{1,3}[.,]\d{3,}\b', ' [coord] ', text)
+    text = re.sub(r'\d{1,3}\s*°\s*\d{1,2}', ' [coord] ', text)
+    
+    # 2. Обработка латиницы (SOS, GPS, LBS и т.д.)
+    if USE_LATIN:
+        # Заменяем аббревиатуру SOS на токен [sos]
+        text = re.sub(r'\bsos\b', ' [sos] ', text)
+        # Оставляем латиницу, но удаляем остальную пунктуацию
+        text = re.sub(r'[^а-яёa-z\s.,\[\]]', '', text)
+    else:
+        # Удаляем всю латиницу, кроме токенов в скобках
+        text = re.sub(r'[^а-яё\s.,\[\]]', '', text)
+    
+    # 3. Очистка от лишних пробелов
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
 def lemmatize(text):
-    words = re.findall(r'[а-яё]+', text)
-    lemmas = [morph.parse(word)[0].normal_form for word in words]
+    # Ищем только кириллицу и токены в квадратных скобках
+    # (латиница не лемматизируется pymorphy3, она остается как есть)
+    words = re.findall(r'\[[a-z]+\]|[а-яё]+', text)
+    lemmas = []
+    for word in words:
+        if word.startswith('['):
+            # Токены [coord], [sos] оставляем без изменений
+            lemmas.append(word)
+        else:
+            # Обычные русские слова лемматизируем
+            lemmas.append(morph.parse(word)[0].normal_form)
     return ' '.join(lemmas)
 
 df = pd.read_csv(os.path.join(DATA_DIR, 'corpus.csv'), sep=';', encoding='utf-8-sig')
 
+print("Идет очистка текста...")
 df['clean_text'] = df['text'].apply(clean_text)
 
 print("Идет лемматизация, подождите...")
