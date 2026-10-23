@@ -13,7 +13,6 @@ def check_balance():
     total = len(df)
     
     # --- СЧЕТЧИК СИНТЕТИКИ ---
-    # Если колонка пустая или ее нет, считаем, что синтетики 0
     if 'is_synthetic' in df.columns:
         synthetic_count = df['is_synthetic'].sum()
     else:
@@ -22,11 +21,11 @@ def check_balance():
     real_count = total - synthetic_count
     syn_percent = (synthetic_count / total) * 100 if total > 0 else 0
 
-    print("=" * 50)
+    print("=" * 60)
     print(f"ВСЕГО СООБЩЕНИЙ В БАЗЕ: {total}")
     print(f"  Реальных:  {real_count} ({(real_count/total)*100:.1f}%)")
     print(f"  Синтетики: {synthetic_count} ({syn_percent:.1f}%)")
-    print("=" * 50)
+    print("=" * 60)
 
     # 1. Статистика по категориям
     print("\n--- СТАТИСТИКА ПО КАТЕГОРИЯМ (category) ---")
@@ -35,30 +34,56 @@ def check_balance():
         percent = (count / total) * 100
         print(f"{cat:<15} : {count:>4} ({percent:.1f}%)")
 
-    # 2. Статистика по интентам
+    # 2. Статистика по интентам (с разбивкой на реальные/синтетику)
     print("\n--- СТАТИСТИКА ПО ИНТЕНТАМ (intent) ---")
-    intent_counts = df['intent'].value_counts()
-    for intent, count in intent_counts.items():
-        percent = (count / total) * 100
-        print(f"{intent:<25} : {count:>4} ({percent:.1f}%)")
+    print(f"{'Интент':<25} | {'Всего':>5} | {'Реал':>5} | {'Синт':>5} | {'% синт':>7}")
+    print("-" * 60)
+    
+    # Группируем по интенту и считаем сумму синтетики
+    intent_stats = df.groupby('intent').agg(
+        total=('intent', 'size'),
+        synthetic=('is_synthetic', 'sum')
+    )
+    intent_stats['real'] = intent_stats['total'] - intent_stats['synthetic']
+    intent_stats['syn_pct'] = (intent_stats['synthetic'] / intent_stats['total']) * 100
+    
+    # Сортируем по общему количеству (по убыванию)
+    intent_stats = intent_stats.sort_values('total', ascending=False)
+    
+    for intent, row in intent_stats.iterrows():
+        # Выделяем красным флагом те классы, где синтетики больше 30%
+        flag = " [!]" if row['syn_pct'] > 30 else ""
+        print(f"{intent:<25} | {int(row['total']):>5} | {int(row['real']):>5} | {int(row['synthetic']):>5} | {row['syn_pct']:>6.1f}%{flag}")
 
     # 3. Анализ дисбаланса
     print("\n--- АНАЛИЗ ДИСБАЛАНСА ---")
-    if len(intent_counts) > 0:
-        max_intent = intent_counts.index[0]
-        max_count = intent_counts.iloc[0]
-        min_intent = intent_counts.index[-1]
-        min_count = intent_counts.iloc[-1]
+    if len(intent_stats) > 0:
+        max_intent = intent_stats.index[0]
+        max_count = intent_stats.iloc[0]['total']
+        min_intent = intent_stats.index[-1]
+        min_count = intent_stats.iloc[-1]['total']
         
-        print(f"Самый частый класс: {max_intent} ({max_count} шт.)")
-        print(f"Самый редкий класс: {min_intent} ({min_count} шт.)")
-        print(f"Разница: {max_count - min_count} шт.")
+        print(f"Самый частый класс: {max_intent} ({int(max_count)} шт.)")
+        print(f"Самый редкий класс: {min_intent} ({int(min_count)} шт.)")
+        print(f"Разница: {int(max_count - min_count)} шт.")
         
         if max_count > min_count * 3:
             print("\n[ВНИМАНИЕ] Сильный дисбаланс! Модель будет переобучаться на частый класс.")
             print("Рекомендуется добавить сообщений для редких классов.")
         else:
             print("\n[ОК] Баланс классов в пределах нормы.")
+
+    # 4. Проверка соотношения 3:1
+    print("\n--- ПРОВЕРКА СООТНОШЕНИЯ 3:1 ---")
+    max_allowed_syn = real_count // 3
+    print(f"Текущее реальных: {real_count}")
+    print(f"Максимум синтетики для 3:1: {max_allowed_syn}")
+    print(f"Текущее синтетики: {synthetic_count}")
+    
+    if synthetic_count <= max_allowed_syn:
+        print("[ОК] Соотношение 3:1 соблюдено.")
+    else:
+        print(f"[ВНИМАНИЕ] Превышен лимит синтетики! Нужно добавить {synthetic_count - max_allowed_syn} реальных сообщений или удалить лишнюю синтетику.")
 
 if __name__ == "__main__":
     check_balance()

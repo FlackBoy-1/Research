@@ -7,7 +7,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import cross_val_predict
 from sklearn.pipeline import make_pipeline
 from sklearn.decomposition import TruncatedSVD
-from kneed import KneeLocator
 import os
 from datetime import datetime
 import warnings
@@ -34,7 +33,8 @@ try:
         K_STAR = int(f.read().strip())
     print(f"Автоматически загружен k* = {K_STAR} из файла.")
 except:
-    K_STAR = 67
+    K_STAR = 51
+    print(f"Файл best_k.txt не найден. Используем k*={K_STAR}.")
 
 plot_dir = os.path.join(PLOTS_DIR, 'v_analysis')
 os.makedirs(plot_dir, exist_ok=True)
@@ -45,21 +45,37 @@ thresholds = []
 
 print(f"\nЗапуск поиска V* при фиксированном k*={K_STAR}...")
 
-# Расширяем перебор до 10, чтобы точно увидеть падение
-for current_min_df in range(1, 11):
-    vectorizer = TfidfVectorizer(
-        ngram_range=(1, 2), 
-        token_pattern=r'(?u)\b\w+\b',
-        stop_words=final_stop_words,
-        min_df=current_min_df 
-    )
+# Создаем кастомный анализатор, который сохраняет все слова и биграммы,
+# а фильтрацию по частоте мы сделаем сами позже.
+vectorizer_base = TfidfVectorizer(
+    ngram_range=(1, 2), 
+    token_pattern=r'(?u)\b\w+\b',
+    stop_words=final_stop_words,
+    min_df=1 # Берем абсолютно все слова
+)
+vectorizer_base.fit(df['lemmas'])
+all_features = vectorizer_base.get_feature_names_out()
+# Считаем частоту каждого слова в корпусе
+count_vectorizer = TfidfVectorizer(
+    ngram_range=(1, 2), 
+    token_pattern=r'(?u)\b\w+\b',
+    stop_words=final_stop_words,
+    use_idf=False, norm=None, binary=False
+)
+count_matrix = count_vectorizer.fit_transform(df['lemmas'])
+frequencies = count_matrix.sum(axis=0).A1
+freq_dict = dict(zip(count_vectorizer.get_feature_names_out(), frequencies))
+
+# Перебираем пороги min_df
+for current_min_df in range(1, 15):
+    # Вручную отбираем слова: либо частота >= min_df, либо слово в keep_words
+    valid_features = []
+    for word in all_features:
+        if freq_dict[word] >= current_min_df or word in keep_words:
+            valid_features.append(word)
+            
+    vocab_size = len(valid_features)
     
-    try:
-        X = vectorizer.fit_transform(df['lemmas'])
-        vocab_size = X.shape[1]
-    except ValueError:
-        continue
-        
     if vocab_size < K_STAR:
         print(f"min_df={current_min_df} (слов: {vocab_size}): Слишком мало слов для k*={K_STAR}, останавливаемся.")
         break
@@ -69,9 +85,15 @@ for current_min_df in range(1, 11):
     
     try:
         clf = LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced')
-        pipeline = make_pipeline(TfidfVectorizer(ngram_range=(1,2), token_pattern=r'(?u)\b\w+\b', stop_words=final_stop_words, min_df=current_min_df),
-                                 TruncatedSVD(n_components=K_STAR, random_state=42),
-                                 clf)
+        # Внимание: в pipeline мы не можем передать список valid_features напрямую как vocabulary,
+        # поэтому строим векторизатор, который ограничен этими словами.
+        vec = TfidfVectorizer(
+            ngram_range=(1, 2), 
+            token_pattern=r'(?u)\b\w+\b',
+            stop_words=final_stop_words,
+            vocabulary=valid_features
+        )
+        pipeline = make_pipeline(vec, TruncatedSVD(n_components=K_STAR, random_state=42), clf)
         y_pred = cross_val_predict(pipeline, df['lemmas'], y_intent, cv=5)
         f1 = f1_score(y_intent, y_pred, average='macro', zero_division=0)
     except Exception as e:
@@ -80,46 +102,38 @@ for current_min_df in range(1, 11):
     f1_scores.append(f1)
     print(f"min_df={current_min_df} (слов: {vocab_size}): F1 = {f1:.3f}")
 
-# --- УМНЫЙ ВЫБОР V* (Компромисс между F1 и сжатием) ---
+# --- УМНЫЙ ВЫБОР V* ---
 max_f1 = max(f1_scores)
 tolerance = 0.01 # Допустимая потеря качества (1%)
 
-# Находим точки, где F1 не упал больше, чем на 1%
 valid_indices = [i for i, f1 in enumerate(f1_scores) if f1 >= (max_f1 - tolerance)]
-
-# Из этих точек выбираем ту, где словарь МИНИМАЛЕН (то есть максимальный min_df)
 best_idx = valid_indices[-1]
 
 best_min_df = thresholds[best_idx]
 best_vocab_size = vocab_sizes[best_idx]
 best_f1 = f1_scores[best_idx]
 
-print(f"\n[+] Максимальный F1 = {max_f1:.3f} (при min_df={thresholds[np.argmax(f1_scores)]})")
-print(f"[+] Допустимая просадка (tolerance) = {tolerance}")
-print(f"[+] Найдена оптимальная точка (макс. сжатие при потере F1 не более 1%):")
+print(f"\n[+] Максимальный F1 = {max_f1:.3f}")
+print(f"[+] Найдена оптимальная точка:")
 print(f"    min_df = {best_min_df}")
 print(f"    Размер словаря (V*) = {best_vocab_size}")
 print(f"    F1 = {best_f1:.3f}")
 
-# Сохраняем
 with open(os.path.join(DATA_DIR, 'best_min_df.txt'), 'w') as f:
     f.write(str(best_min_df))
 with open(os.path.join(DATA_DIR, 'best_v.txt'), 'w') as f:
     f.write(str(best_vocab_size))
 
-# Построение графика
+# Построение графика (без изменений)
 fig, ax1 = plt.subplots(figsize=(10, 6))
 color = 'tab:blue'
 ax1.set_xlabel('Размер словаря (количество слов и биграмм)')
 ax1.set_ylabel('Macro F1-Score', color=color)
 ax1.plot(vocab_sizes, f1_scores, color=color, marker='o', linewidth=2)
 ax1.tick_params(axis='y', labelcolor=color)
-
-# ВОТ ЗДЕСЬ ставим точку ровно туда, где best_idx
 ax1.scatter([best_vocab_size], [best_f1], color='red', s=100, zorder=5, label=f'V* = {best_vocab_size} (min_df={best_min_df})')
 ax1.legend()
 
-# Подписываем точки
 for i in range(len(thresholds)):
     ax1.annotate(f'min_df={thresholds[i]}', (vocab_sizes[i], f1_scores[i]), textcoords="offset points", xytext=(0,10), ha='center')
 
