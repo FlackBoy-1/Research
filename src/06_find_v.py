@@ -88,22 +88,46 @@ tolerance = 0.01 # Допустимая потеря качества (1%)
 valid_indices = [i for i, f1 in enumerate(f1_scores) if f1 >= (max_f1 - tolerance)]
 
 # Из этих точек выбираем ту, где словарь МИНИМАЛЕН (то есть максимальный min_df)
-# Так как valid_indices отсортирован по возрастанию min_df, 
-# самая правая точка в этом списке даст нам минимальный словарь!
 best_idx = valid_indices[-1]
 
 best_min_df = thresholds[best_idx]
 best_vocab_size = vocab_sizes[best_idx]
 best_f1 = f1_scores[best_idx]
 
-print(f"\n[+] Максимальный F1 = {max_f1:.3f}")
+print(f"\n[+] Максимальный F1 = {max_f1:.3f} (при min_df={thresholds[np.argmax(f1_scores)]})")
 print(f"[+] Допустимая просадка (tolerance) = {tolerance}")
 print(f"[+] Найдена оптимальная точка (макс. сжатие при потере F1 не более 1%):")
 print(f"    min_df = {best_min_df}")
 print(f"    Размер словаря (V*) = {best_vocab_size}")
 print(f"    F1 = {best_f1:.3f}")
 
+# Сохраняем
 with open(os.path.join(DATA_DIR, 'best_min_df.txt'), 'w') as f:
     f.write(str(best_min_df))
 with open(os.path.join(DATA_DIR, 'best_v.txt'), 'w') as f:
     f.write(str(best_vocab_size))
+
+# Построение графика
+fig, ax1 = plt.subplots(figsize=(10, 6))
+color = 'tab:blue'
+ax1.set_xlabel('Размер словаря (количество слов и биграмм)')
+ax1.set_ylabel('Macro F1-Score', color=color)
+ax1.plot(vocab_sizes, f1_scores, color=color, marker='o', linewidth=2)
+ax1.tick_params(axis='y', labelcolor=color)
+
+# ВОТ ЗДЕСЬ ставим точку ровно туда, где best_idx
+ax1.scatter([best_vocab_size], [best_f1], color='red', s=100, zorder=5, label=f'V* = {best_vocab_size} (min_df={best_min_df})')
+ax1.legend()
+
+# Подписываем точки
+for i in range(len(thresholds)):
+    ax1.annotate(f'min_df={thresholds[i]}', (vocab_sizes[i], f1_scores[i]), textcoords="offset points", xytext=(0,10), ha='center')
+
+plt.title(f'Зависимость F1 от размера словаря (V)\nСтрок: {num_rows} | k* = {K_STAR}', fontsize=14)
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+
+timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+filename = os.path.join(plot_dir, f'metrics_vs_vocab_rows{num_rows}_k{K_STAR}_{timestamp}.png')
+plt.savefig(filename, dpi=300)
+print(f"\nГрафик сохранен в {filename}")
