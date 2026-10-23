@@ -11,8 +11,7 @@ from scipy.linalg import norm
 from kneed import KneeLocator
 import os
 from datetime import datetime
-import warnings
-warnings.filterwarnings('ignore')
+import sys
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
@@ -24,9 +23,16 @@ y_intent = df['intent']
 num_rows = len(df)
 
 # Восстанавливаем векторизатор и матрицу X из 03_lsa.py
-with open(os.path.join(BASE_DIR, 'models', 'vectorizer.pkl'), 'rb') as f:
+model_path = os.path.join(BASE_DIR, 'models', 'vectorizer.pkl')
+matrix_path = os.path.join(DATA_DIR, 'matrix_x.pkl')
+
+if not os.path.exists(model_path) or not os.path.exists(matrix_path):
+    print("[ОШИБКА] Файлы vectorizer.pkl или matrix_x.pkl не найдены. Запустите этап 3.")
+    sys.exit(1)
+
+with open(model_path, 'rb') as f:
     vectorizer = pickle.load(f)
-with open(os.path.join(DATA_DIR, 'matrix_x.pkl'), 'rb') as f:
+with open(matrix_path, 'rb') as f:
     X = pickle.load(f)
 
 num_features = X.shape[1]
@@ -43,7 +49,7 @@ f1_scores = []
 print(f"Запуск анализа для {num_rows} строк. Диапазон k: 2 - {max_possible_k}")
 
 for k in k_range:
-    # 1. Reconstruction Error и Silhouette (считаем на всем X для построения графика)
+    # 1. Reconstruction Error
     svd = TruncatedSVD(n_components=k, random_state=42)
     X_lsa = svd.fit_transform(X)
     
@@ -51,24 +57,32 @@ for k in k_range:
     error = norm(X - X_reconstructed, 'fro')
     recon_errors.append(error)
     
+    # 2. Silhouette
     try:
-        sil = silhouette_score(X_lsa, y_category)
-    except:
-        sil = 0
+        # Проверка, что в y_category больше одного класса
+        if len(np.unique(y_category)) > 1:
+            sil = silhouette_score(X_lsa, y_category)
+        else:
+            sil = np.nan
+    except Exception as e:
+        print(f"[ПРЕДУПРЕЖДЕНИЕ] Ошибка при расчете Silhouette на k={k}: {e}")
+        sil = np.nan
     silhouettes.append(sil)
     
-    # 2. F1-Score через Pipeline (без утечки данных!)
+    # 3. F1-Score через Pipeline (без утечки данных!)
     try:
         clf = LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced')
         # Внутри каждого фолда SVD обучается только на Train
         pipeline = make_pipeline(TruncatedSVD(n_components=k, random_state=42), clf)
-        y_pred = cross_val_predict(pipeline, X, y_intent, cv=5)
+        y_pred = cross_val_predict(pipeline, X, y_intent, cv=5, n_jobs=-1)
         f1 = f1_score(y_intent, y_pred, average='macro', zero_division=0)
     except Exception as e:
-        f1 = 0
+        print(f"[ПРЕДУПРЕЖДЕНИЕ] Ошибка при CV на k={k}: {e}")
+        f1 = np.nan
+        
     f1_scores.append(f1)
 
-# Сохраняем метрики для 05_select_k.py, чтобы не считать дважды
+# Сохраняем метрики для 05_select_k.py
 metrics_df = pd.DataFrame({
     'k': list(k_range),
     'recon_error': recon_errors,
@@ -77,9 +91,17 @@ metrics_df = pd.DataFrame({
 })
 metrics_df.to_csv(os.path.join(DATA_DIR, 'k_metrics.csv'), sep=';', index=False)
 
-knee_error = KneeLocator(k_range, recon_errors, curve='convex', direction='decreasing').elbow
-knee_sil = KneeLocator(k_range, silhouettes, curve='concave', direction='increasing').elbow
-knee_f1 = KneeLocator(k_range, f1_scores, curve='concave', direction='increasing').elbow
+# Поиск локтей (только на валидных точках)
+valid_mask = ~np.isnan(f1_scores)
+k_valid = np.array(list(k_range))[valid_mask]
+f1_valid = np.array(f1_scores)[valid_mask]
+
+if len(k_valid) > 0:
+    knee_error = KneeLocator(k_range, recon_errors, curve='convex', direction='decreasing').elbow
+    knee_sil = KneeLocator(k_range, silhouettes, curve='concave', direction='increasing').elbow
+    knee_f1 = KneeLocator(k_valid, f1_valid, curve='concave', direction='increasing').elbow
+else:
+    knee_error, knee_sil, knee_f1 = None, None, None
 
 print(f"\n--- Результаты поиска локтей ---")
 print(f"Локоть Reconstruction Error: k = {knee_error}")
@@ -101,7 +123,7 @@ ax2.plot(k_range, f1_scores, color='tab:orange', marker='^', linestyle='-.', lab
 ax2.tick_params(axis='y', labelcolor=color2)
 
 if knee_f1:
-    ax2.axvline(x=knee_f1, color='tab:orange', linestyle=':', alpha=0.5)
+    ax2.axvline(x=knee_f1, color='tab:orange', linestyle=':', alpha=0.5, label='Локоть F1')
 
 plt.title(f'Зависимость метрик от k\nСтрок: {num_rows} | k: 2-{max_possible_k}', fontsize=14)
 plt.grid(True, alpha=0.3)
@@ -113,4 +135,5 @@ plt.tight_layout()
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 filename = os.path.join(plot_dir, f'metrics_rows{num_rows}_k2-{max_possible_k}_{timestamp}.png')
 plt.savefig(filename, dpi=300)
+plt.close() # Закрываем фигуру
 print(f"\nГрафик сохранен в {filename}")

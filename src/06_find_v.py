@@ -9,8 +9,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.decomposition import TruncatedSVD
 import os
 from datetime import datetime
-import warnings
-warnings.filterwarnings('ignore')
+import sys
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
@@ -21,20 +20,20 @@ y_intent = df['intent']
 num_rows = len(df)
 
 def load_words(filename):
-    with open(filename, 'r', encoding='utf-8') as f:
+    with open(os.path.join(DATA_DIR, filename), 'r', encoding='utf-8') as f:
         return [line.strip() for line in f if line.strip()]
 
-stop_words = load_words(os.path.join(DATA_DIR, 'stop_words.txt'))
-keep_words = load_words(os.path.join(DATA_DIR, 'keep_words.txt'))
+stop_words = load_words('stop_words.txt')
+keep_words = load_words('keep_words.txt')
 final_stop_words = [word for word in stop_words if word not in keep_words]
 
 try:
     with open(os.path.join(DATA_DIR, 'best_k.txt'), 'r') as f:
         K_STAR = int(f.read().strip())
     print(f"Автоматически загружен k* = {K_STAR} из файла.")
-except:
-    K_STAR = 51
-    print(f"Файл best_k.txt не найден. Используем k*={K_STAR}.")
+except Exception as e:
+    print(f"[ОШИБКА] Файл best_k.txt не найден или поврежден ({e}). Запустите этап 5.")
+    sys.exit(1)
 
 plot_dir = os.path.join(PLOTS_DIR, 'v_analysis')
 os.makedirs(plot_dir, exist_ok=True)
@@ -45,17 +44,7 @@ thresholds = []
 
 print(f"\nЗапуск поиска V* при фиксированном k*={K_STAR}...")
 
-# Создаем кастомный анализатор, который сохраняет все слова и биграммы,
-# а фильтрацию по частоте мы сделаем сами позже.
-vectorizer_base = TfidfVectorizer(
-    ngram_range=(1, 2), 
-    token_pattern=r'(?u)\b\w+\b',
-    stop_words=final_stop_words,
-    min_df=1 # Берем абсолютно все слова
-)
-vectorizer_base.fit(df['lemmas'])
-all_features = vectorizer_base.get_feature_names_out()
-# Считаем частоту каждого слова в корпусе
+# 1. Считаем частоты всех фич (униграммы и биграммы)
 count_vectorizer = TfidfVectorizer(
     ngram_range=(1, 2), 
     token_pattern=r'(?u)\b\w+\b',
@@ -64,14 +53,15 @@ count_vectorizer = TfidfVectorizer(
 )
 count_matrix = count_vectorizer.fit_transform(df['lemmas'])
 frequencies = count_matrix.sum(axis=0).A1
-freq_dict = dict(zip(count_vectorizer.get_feature_names_out(), frequencies))
+feature_names_all = count_vectorizer.get_feature_names_out()
+freq_dict = dict(zip(feature_names_all, frequencies))
 
 # Перебираем пороги min_df
 for current_min_df in range(1, 15):
-    # Вручную отбираем слова: либо частота >= min_df, либо слово в keep_words
     valid_features = []
-    for word in all_features:
-        if freq_dict[word] >= current_min_df or word in keep_words:
+    for word in feature_names_all:
+        freq = freq_dict.get(word, 0)
+        if freq >= current_min_df or word in keep_words:
             valid_features.append(word)
             
     vocab_size = len(valid_features)
@@ -85,8 +75,6 @@ for current_min_df in range(1, 15):
     
     try:
         clf = LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced')
-        # Внимание: в pipeline мы не можем передать список valid_features напрямую как vocabulary,
-        # поэтому строим векторизатор, который ограничен этими словами.
         vec = TfidfVectorizer(
             ngram_range=(1, 2), 
             token_pattern=r'(?u)\b\w+\b',
@@ -97,24 +85,34 @@ for current_min_df in range(1, 15):
         y_pred = cross_val_predict(pipeline, df['lemmas'], y_intent, cv=5)
         f1 = f1_score(y_intent, y_pred, average='macro', zero_division=0)
     except Exception as e:
-        f1 = 0
+        print(f"[ОШИБКА] min_df={current_min_df} упал: {e}")
+        f1 = np.nan
         
     f1_scores.append(f1)
-    print(f"min_df={current_min_df} (слов: {vocab_size}): F1 = {f1:.3f}")
+    if not np.isnan(f1):
+        print(f"min_df={current_min_df} (слов: {vocab_size}): F1 = {f1:.3f}")
 
 # --- УМНЫЙ ВЫБОР V* ---
-max_f1 = max(f1_scores)
+valid_indices = [i for i, f1 in enumerate(f1_scores) if not np.isnan(f1)]
+if not valid_indices:
+    print("[ОШИБКА] Все запуски упали. Невозможно выбрать V*.")
+    sys.exit(1)
+
+valid_f1 = [f1_scores[i] for i in valid_indices]
+max_f1 = max(valid_f1)
 tolerance = 0.01 # Допустимая потеря качества (1%)
 
-valid_indices = [i for i, f1 in enumerate(f1_scores) if f1 >= (max_f1 - tolerance)]
-best_idx = valid_indices[-1]
+candidate_indices = [i for i in valid_indices if f1_scores[i] >= (max_f1 - tolerance)]
+
+# ЖЕСТКО ВЫБИРАЕМ МИНИМАЛЬНЫЙ СЛОВАРЬ ИЗ КАНДИДАТОВ
+best_idx = min(candidate_indices, key=lambda i: vocab_sizes[i])
 
 best_min_df = thresholds[best_idx]
 best_vocab_size = vocab_sizes[best_idx]
 best_f1 = f1_scores[best_idx]
 
 print(f"\n[+] Максимальный F1 = {max_f1:.3f}")
-print(f"[+] Найдена оптимальная точка:")
+print(f"[+] Найдена оптимальная точка (минимальный словарь в пределах {tolerance*100}% от max F1):")
 print(f"    min_df = {best_min_df}")
 print(f"    Размер словаря (V*) = {best_vocab_size}")
 print(f"    F1 = {best_f1:.3f}")
@@ -124,7 +122,7 @@ with open(os.path.join(DATA_DIR, 'best_min_df.txt'), 'w') as f:
 with open(os.path.join(DATA_DIR, 'best_v.txt'), 'w') as f:
     f.write(str(best_vocab_size))
 
-# Построение графика (без изменений)
+# Построение графика
 fig, ax1 = plt.subplots(figsize=(10, 6))
 color = 'tab:blue'
 ax1.set_xlabel('Размер словаря (количество слов и биграмм)')
@@ -135,7 +133,9 @@ ax1.scatter([best_vocab_size], [best_f1], color='red', s=100, zorder=5, label=f'
 ax1.legend()
 
 for i in range(len(thresholds)):
-    ax1.annotate(f'min_df={thresholds[i]}', (vocab_sizes[i], f1_scores[i]), textcoords="offset points", xytext=(0,10), ha='center')
+    if not np.isnan(f1_scores[i]):
+        ax1.annotate(f'min_df={thresholds[i]}', (vocab_sizes[i], f1_scores[i]), 
+                     textcoords="offset points", xytext=(0,10), ha='center', fontsize=8, alpha=0.8)
 
 plt.title(f'Зависимость F1 от размера словаря (V)\nСтрок: {num_rows} | k* = {K_STAR}', fontsize=14)
 plt.grid(True, alpha=0.3)
@@ -144,4 +144,5 @@ plt.tight_layout()
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 filename = os.path.join(plot_dir, f'metrics_vs_vocab_rows{num_rows}_k{K_STAR}_{timestamp}.png')
 plt.savefig(filename, dpi=300)
+plt.close()
 print(f"\nГрафик сохранен в {filename}")

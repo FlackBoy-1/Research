@@ -1,6 +1,7 @@
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 import os
+import sys
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
@@ -19,20 +20,12 @@ try:
     with open(os.path.join(DATA_DIR, 'best_min_df.txt'), 'r') as f:
         BEST_MIN_DF = int(f.read().strip())
     print(f"Автоматически загружен min_df* = {BEST_MIN_DF} из файла.")
-except:
-    BEST_MIN_DF = 3
-    print("Файл best_min_df.txt не найден. Используем min_df=3 по умолчанию.")
+except Exception as e:
+    print(f"[ОШИБКА] Файл best_min_df.txt не найден или поврежден ({e}). Запустите этап 6.")
+    sys.exit(1)
 
-# 1. Считаем частоты всех слов
-vectorizer_all = TfidfVectorizer(
-    ngram_range=(1, 2), 
-    token_pattern=r'(?u)\b\w+\b',
-    stop_words=final_stop_words,
-    min_df=1 
-)
-X_all = vectorizer_all.fit_transform(df['lemmas'])
-feature_names_all = vectorizer_all.get_feature_names_out()
-
+# 1. Считаем частоты всех слов (униграммы и биграммы)
+# Используем CountVectorizer (через Tfidf с use_idf=False) для точных частот
 count_vectorizer = TfidfVectorizer(
     ngram_range=(1, 2), 
     token_pattern=r'(?u)\b\w+\b',
@@ -41,14 +34,17 @@ count_vectorizer = TfidfVectorizer(
 )
 count_matrix = count_vectorizer.fit_transform(df['lemmas'])
 frequencies = count_matrix.sum(axis=0).A1
-freq_dict = dict(zip(count_vectorizer.get_feature_names_out(), frequencies))
+feature_names_all = count_vectorizer.get_feature_names_out()
+freq_dict = dict(zip(feature_names_all, frequencies))
 
 # 2. Формируем итоговый словарь V*
 feature_names_kept = []
 removed_words = []
 
 for word in feature_names_all:
-    if freq_dict[word] >= BEST_MIN_DF or word in keep_words:
+    # Защита от KeyError (на всякий случай, хотя тут все слова из корпуса)
+    freq = freq_dict.get(word, 0)
+    if freq >= BEST_MIN_DF or word in keep_words:
         feature_names_kept.append(word)
     else:
         removed_words.append(word)
@@ -71,16 +67,23 @@ with open(removed_path, 'w', encoding='utf-8') as f:
         f.write(f"{word} (частота: {int(freq_dict[word])})\n")
 
 print("\n=== АУДИТ СЛОВАРЯ ЗАВЕРШЕН ===")
-print(f"Всего слов до фильтрации (min_df=1): {len(feature_names_all)}")
+print(f"Всего фич до фильтрации (min_df=1): {len(feature_names_all)}")
 print(f"Оставлено в V* (min_df={BEST_MIN_DF} + keep_words): {len(feature_names_kept)}")
 print(f"Удалено как редкие: {len(removed_words)}")
 print(f"\n[+] Оставшиеся слова сохранены в: {kept_path}")
 print(f"[+] Удаленные слова (с частотой) сохранены в: {removed_path}")
 
 print("\n=== ПРОВЕРКА КРИТИЧЕСКИХ СЛОВ В V* ===")
+# Проверяем только униграммы, чтобы биграммы не давали ложных срабатываний
 critical_words = ['лавина', 'медведь', 'обморожение', 'кровотечение', 'травма', 'помочь', 'спасатель']
+kept_unigrams = set([w for w in feature_names_kept if ' ' not in w])
+
 for word in critical_words:
-    if word in feature_names_kept:
+    if word in kept_unigrams:
         print(f"[+] {word} — осталось в словаре.")
     else:
-        print(f"[-] {word} — ПОТЕРЯНО! (частота: {int(freq_dict.get(word, 0))})")
+        in_bigrams = any(word in w.split() for w in feature_names_kept if ' ' in w)
+        if in_bigrams:
+             print(f"[!] {word} — как униграмма потеряно, но встречается в биграммах.")
+        else:
+             print(f"[-] {word} — ПОТЕРЯНО! (частота: {int(freq_dict.get(word, 0))})")
