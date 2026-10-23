@@ -74,7 +74,7 @@ for k in k_range:
         clf = LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced')
         # Внутри каждого фолда SVD обучается только на Train
         pipeline = make_pipeline(TruncatedSVD(n_components=k, random_state=42), clf)
-        y_pred = cross_val_predict(pipeline, X, y_intent, cv=5, n_jobs=-1)
+        y_pred = cross_val_predict(pipeline, X, y_intent, cv=5, n_jobs=2)
         f1 = f1_score(y_intent, y_pred, average='macro', zero_division=0)
     except Exception as e:
         print(f"[ПРЕДУПРЕЖДЕНИЕ] Ошибка при CV на k={k}: {e}")
