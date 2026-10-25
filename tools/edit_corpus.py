@@ -29,7 +29,7 @@ def save_data(df, original_df):
     if df.equals(original_df):
         return
     create_backup("after_edit")
-    # Пересчитываем ID ТОЛЬКО перед сохранением, чтобы файл был чистым
+    # Пересчитываем ID ТОЛЬКО перед сохранением
     df['id'] = range(1, len(df) + 1)
     df.to_csv(CORPUS_PATH, sep=';', index=False, encoding='utf-8-sig')
     print("[УСПЕХ] Изменения сохранены в corpus.csv (ID пересчитаны от 1 до N)")
@@ -56,12 +56,19 @@ def parse_id_input(user_input):
 def filter_data(df):
     filtered_df = df.copy()
     
-    # Всегда отсекаем синтетику
-    if 'is_synthetic' in filtered_df.columns:
-        filtered_df = filtered_df[filtered_df['is_synthetic'] == 0]
-
     print("\n--- НАСТРОЙКА ФИЛЬТРА (Enter, чтобы пропустить) ---")
     
+    # НОВЫЙ ФИЛЬТР: Выбор источника данных
+    source = input("Источник данных (1 - только реальные, 2 - только синтетика, Enter - все): ").strip()
+    if source == '1' and 'is_synthetic' in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df['is_synthetic'] == 0]
+        print("  -> Фильтр: только реальные сообщения")
+    elif source == '2' and 'is_synthetic' in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df['is_synthetic'] == 1]
+        print("  -> Фильтр: только синтетические сообщения")
+    else:
+        print("  -> Фильтр: все сообщения")
+
     cat = input("Категория (SOS/Информационное/Запрос/Тест): ").strip()
     if cat:
         filtered_df = filtered_df[filtered_df['category'] == cat]
@@ -86,7 +93,9 @@ def export_view(filtered_df):
         f.write(f"ВЫГРУЗКА КОРПУСА (Найдено строк: {len(filtered_df)})\n")
         f.write("=" * 80 + "\n\n")
         for _, row in filtered_df.iterrows():
-            f.write(f"ID: {row['id']} | Интент: {row['intent']} | Срочность: {row['urgency']} | Категория: {row['category']}\n")
+            # Показываем пометку, синтетика это или нет
+            synth_mark = "[СИНТ]" if row.get('is_synthetic') == 1 else "[РЕАЛ]"
+            f.write(f"ID: {row['id']} | {synth_mark} | Интент: {row['intent']} | Срочность: {row['urgency']} | Категория: {row['category']}\n")
             f.write(f"ТЕКСТ: {row['text']}\n")
             f.write("-" * 80 + "\n")
 
@@ -95,9 +104,8 @@ def main():
     original_df = df.copy()
     
     print("="*60)
-    print("РЕДАКТОР КОРПУСА (v3.2 - Stable ID Edition)")
+    print("РЕДАКТОР КОРПУСА (v3.3 - Full Source Control)")
     print("ID не меняются во время сессии. Пересчет только при выходе.")
-    print("Синтетические сообщения скрыты автоматически.")
     print("="*60)
     
     current_filtered = pd.DataFrame()
@@ -121,13 +129,14 @@ def main():
                         continue
                     
                     export_view(current_filtered)
-                    print(f"\n[+] Найдено реальных сообщений: {len(current_filtered)}")
+                    print(f"\n[+] Найдено сообщений: {len(current_filtered)}")
                     print(f"[+] Полный текст выгружен в файл: data/filtered_view.txt")
                     
                     print("\n--- Превью (первые 3) ---")
                     for _, row in current_filtered.head(3).iterrows():
+                        synth_mark = "[СИНТ]" if row.get('is_synthetic') == 1 else "[РЕАЛ]"
                         short_text = row['text'][:60] + "..." if len(row['text']) > 60 else row['text']
-                        print(f"ID {row['id']}: {short_text}")
+                        print(f"ID {row['id']} {synth_mark}: {short_text}")
 
                 elif choice == '2':
                     current_filtered = df.copy() 
@@ -155,7 +164,8 @@ def main():
                 print(f"\nВыбрано строк: {len(existing_ids)}")
                 for msg_id in existing_ids[:2]:
                     row = df[df['id'] == msg_id].iloc[0]
-                    print(f"ID {row['id']}: [{row['intent']} / {row['urgency']}] {row['text'][:60]}...")
+                    synth_mark = "[СИНТ]" if row.get('is_synthetic') == 1 else "[РЕАЛ]"
+                    print(f"ID {row['id']} {synth_mark}: [{row['intent']} / {row['urgency']}] {row['text'][:60]}...")
                     
                 print("1. Изменить ТЕКСТ (только для 1 ID!)")
                 print("2. Изменить КАТЕГОРИЮ")
@@ -196,14 +206,9 @@ def main():
                 elif action == '5':
                     confirm = input(f"УДАЛИТЬ {len(existing_ids)} сообщений? (y/n): ").strip().lower()
                     if confirm == 'y':
-                        # Удаляем из основного датафрейма
                         df = df[~df['id'].isin(existing_ids)].copy()
-                        
-                        # Обновляем текущий отфильтрованный список, убирая удаленные ID
                         current_filtered = current_filtered[~current_filtered['id'].isin(existing_ids)].copy()
-                        
                         print(f"[УДАЛЕНО] Удалено {len(existing_ids)} строк. ID остальных не изменены.")
-                        # Пересчет ID произойдет только при сохранении
                 else:
                     print("[ОК] Отмена.")
                     
