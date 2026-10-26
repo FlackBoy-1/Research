@@ -1,9 +1,9 @@
 # Исследование методов сжатия текстовых сообщений в условиях ЧС (НИР)
 
-![Status](https://img.shields.io/badge/status-stable%20v1.0.0-green)
+![Status](https://img.shields.io/badge/status-stable%20v1.0.2-green)
 ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-[![DOI](https://zenodo.org/badge/10.5281/zenodo.23675851.svg)](https://doi.org/10.5281/zenodo.23675851)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.23675851-blue)](https://doi.org/10.5281/zenodo.23675851)
 
 Репозиторий содержит исходный код, данные и научные материалы научно-исследовательской работы (НИР) по теме: 
 **«Исследование методов оптимизации размерности латентно-семантического пространства в задачах обработки текстовых сообщений в условиях чрезвычайных ситуаций»**.
