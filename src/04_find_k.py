@@ -3,6 +3,7 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.decomposition import TruncatedSVD
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import silhouette_score, f1_score
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import cross_val_predict
@@ -22,7 +23,15 @@ y_category = df['category']
 y_intent = df['intent']
 num_rows = len(df)
 
-# Восстанавливаем векторизатор и матрицу X из 03_lsa.py
+def load_words(filename):
+    with open(os.path.join(DATA_DIR, filename), 'r', encoding='utf-8') as f:
+        return [line.strip() for line in f if line.strip()]
+
+stop_words = load_words('stop_words.txt')
+keep_words = load_words('keep_words.txt')
+final_stop_words = [word for word in stop_words if word not in keep_words]
+
+# Восстанавливаем векторизатор и матрицу X из 03_lsa.py (для структурных метрик)
 model_path = os.path.join(BASE_DIR, 'models', 'vectorizer.pkl')
 matrix_path = os.path.join(DATA_DIR, 'matrix_x.pkl')
 
@@ -39,7 +48,7 @@ num_features = X.shape[1]
 plot_dir = os.path.join(PLOTS_DIR, 'k_analysis')
 os.makedirs(plot_dir, exist_ok=True)
 
-max_possible_k = min(num_features, num_rows - 1, 120) 
+max_possible_k = min(num_features, num_rows - 1, 150) 
 k_range = range(2, max_possible_k + 1)
 
 recon_errors = []
@@ -49,17 +58,15 @@ f1_scores = []
 print(f"Запуск анализа для {num_rows} строк. Диапазон k: 2 - {max_possible_k}")
 
 for k in k_range:
-    # 1. Reconstruction Error
+    # 1. Reconstruction Error (на полной матрице)
     svd = TruncatedSVD(n_components=k, random_state=42)
     X_lsa = svd.fit_transform(X)
-    
     X_reconstructed = svd.inverse_transform(X_lsa)
     error = norm(X - X_reconstructed, 'fro')
     recon_errors.append(error)
     
-    # 2. Silhouette
+    # 2. Silhouette (на полной матрице)
     try:
-        # Проверка, что в y_category больше одного класса
         if len(np.unique(y_category)) > 1:
             sil = silhouette_score(X_lsa, y_category)
         else:
@@ -69,12 +76,20 @@ for k in k_range:
         sil = np.nan
     silhouettes.append(sil)
     
-    # 3. F1-Score через Pipeline (без утечки данных!)
+    # 3. F1-Score (БЕЗ УТЕЧКИ: TF-IDF обучается внутри фолдов)
     try:
         clf = LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced')
-        # Внутри каждого фолда SVD обучается только на Train
-        pipeline = make_pipeline(TruncatedSVD(n_components=k, random_state=42), clf)
-        y_pred = cross_val_predict(pipeline, X, y_intent, cv=5, n_jobs=2)
+        pipeline = make_pipeline(
+            TfidfVectorizer(
+                ngram_range=(1, 2), 
+                token_pattern=r'(?u)\b\w+\b',
+                stop_words=final_stop_words,
+                min_df=1 # Полный словарь для поиска k*
+            ),
+            TruncatedSVD(n_components=k, random_state=42), 
+            clf
+        )
+        y_pred = cross_val_predict(pipeline, df['lemmas'], y_intent, cv=5, n_jobs=2)
         f1 = f1_score(y_intent, y_pred, average='macro', zero_division=0)
     except Exception as e:
         print(f"[ПРЕДУПРЕЖДЕНИЕ] Ошибка при CV на k={k}: {e}")
@@ -82,7 +97,6 @@ for k in k_range:
         
     f1_scores.append(f1)
 
-# Сохраняем метрики для 05_select_k.py
 metrics_df = pd.DataFrame({
     'k': list(k_range),
     'recon_error': recon_errors,
@@ -91,7 +105,6 @@ metrics_df = pd.DataFrame({
 })
 metrics_df.to_csv(os.path.join(DATA_DIR, 'k_metrics.csv'), sep=';', index=False)
 
-# Поиск локтей (только на валидных точках)
 valid_mask = ~np.isnan(f1_scores)
 k_valid = np.array(list(k_range))[valid_mask]
 f1_valid = np.array(f1_scores)[valid_mask]
@@ -135,5 +148,5 @@ plt.tight_layout()
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 filename = os.path.join(plot_dir, f'metrics_rows{num_rows}_k2-{max_possible_k}_{timestamp}.png')
 plt.savefig(filename, dpi=300)
-plt.close() # Закрываем фигуру
+plt.close()
 print(f"\nГрафик сохранен в {filename}")

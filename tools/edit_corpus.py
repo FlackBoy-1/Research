@@ -58,7 +58,6 @@ def filter_data(df):
     
     print("\n--- НАСТРОЙКА ФИЛЬТРА (Enter, чтобы пропустить) ---")
     
-    # НОВЫЙ ФИЛЬТР: Выбор источника данных
     source = input("Источник данных (1 - только реальные, 2 - только синтетика, Enter - все): ").strip()
     if source == '1' and 'is_synthetic' in filtered_df.columns:
         filtered_df = filtered_df[filtered_df['is_synthetic'] == 0]
@@ -93,7 +92,6 @@ def export_view(filtered_df):
         f.write(f"ВЫГРУЗКА КОРПУСА (Найдено строк: {len(filtered_df)})\n")
         f.write("=" * 80 + "\n\n")
         for _, row in filtered_df.iterrows():
-            # Показываем пометку, синтетика это или нет
             synth_mark = "[СИНТ]" if row.get('is_synthetic') == 1 else "[РЕАЛ]"
             f.write(f"ID: {row['id']} | {synth_mark} | Интент: {row['intent']} | Срочность: {row['urgency']} | Категория: {row['category']}\n")
             f.write(f"ТЕКСТ: {row['text']}\n")
@@ -104,7 +102,7 @@ def main():
     original_df = df.copy()
     
     print("="*60)
-    print("РЕДАКТОР КОРПУСА (v3.3 - Full Source Control)")
+    print("РЕДАКТОР КОРПУСА (v3.4 - Full Source Control + Synthetic Toggle)")
     print("ID не меняются во время сессии. Пересчет только при выходе.")
     print("="*60)
     
@@ -172,6 +170,7 @@ def main():
                 print("3. Изменить ИНТЕНТ")
                 print("4. Изменить URGENCY")
                 print("5. УДАЛИТЬ выбранные")
+                print("6. Переключить флаг СИНТЕТИКИ (0/1)")
                 print("Enter. Отмена")
                 
                 action = input("Действие: ").strip()
@@ -202,6 +201,15 @@ def main():
                     if new_urg in ['1', '2', '3', '4']:
                         df.loc[df['id'].isin(existing_ids), 'urgency'] = int(new_urg)
                         print(f"[ОК] Urgency обновлен.")
+
+                elif action == '6':
+                    new_synth = input("Новое значение is_synthetic (0 - реал, 1 - синт): ").strip()
+                    if new_synth in ['0', '1']:
+                        df.loc[df['id'].isin(existing_ids), 'is_synthetic'] = int(new_synth)
+                        current_filtered.loc[current_filtered['id'].isin(existing_ids), 'is_synthetic'] = int(new_synth)
+                        print(f"[ОК] Флаг is_synthetic обновлен на {new_synth} для {len(existing_ids)} строк.")
+                    else:
+                        print("[!] Неверный ввод. Введите 0 или 1.")
                         
                 elif action == '5':
                     confirm = input(f"УДАЛИТЬ {len(existing_ids)} сообщений? (y/n): ").strip().lower()
