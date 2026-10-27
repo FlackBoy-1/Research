@@ -18,9 +18,25 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 PLOTS_DIR = os.path.join(BASE_DIR, 'plots')
 
-df = pd.read_csv(os.path.join(DATA_DIR, 'corpus_preprocessed.csv'), sep=';', encoding='utf-8-sig')
-y_category = df['category']
-y_intent = df['intent']
+df = pd.read_csv(os.path.join(DATA_DIR, 'corpus_preprocessed.csv'), sep=';', encoding='utf-8-sig', keep_default_na=False)
+
+# --- МАППИНГ 16 КЛАССОВ В 4 МАКРОКАТЕГОРИИ ---
+MACRO_MAPPING = {
+    'военная_угроза': 'угроза_военная',
+    'техногенная_угроза': 'угроза_техногенная',
+    'травма': 'угроза_общая', 'погибший': 'угроза_общая',
+    'природная_угроза': 'угроза_общая', 'животная_угроза': 'угроза_общая',
+    'заблудился': 'угроза_общая', 'потерялся': 'угроза_общая',
+    'нет_припасов': 'угроза_общая', 'техническая_неисправность': 'угроза_общая', 
+    'погода': 'не_угроза', 'позиция': 'не_угроза',
+    'статус_группы': 'не_угроза', 'проверка_связи': 'не_угроза',
+    'запрос_информации': 'не_угроза', 'запрос_маршрута': 'не_угроза'
+}
+df['intent'] = df['intent'].map(MACRO_MAPPING)
+df = df.dropna(subset=['intent']) # Удаляем строки, если вдруг попались неизвестные классы
+
+y_category = df['intent'] # Силуэт считаем по 4 классам
+y_intent = df['intent']   # F1 считаем по 4 классам
 num_rows = len(df)
 
 def load_words(filename):
@@ -31,7 +47,7 @@ stop_words = load_words('stop_words.txt')
 keep_words = load_words('keep_words.txt')
 final_stop_words = [word for word in stop_words if word not in keep_words]
 
-# Восстанавливаем векторизатор и матрицу X из 03_lsa.py (для структурных метрик)
+# Восстанавливаем матрицу X
 model_path = os.path.join(BASE_DIR, 'models', 'vectorizer.pkl')
 matrix_path = os.path.join(DATA_DIR, 'matrix_x.pkl')
 
@@ -44,6 +60,10 @@ with open(model_path, 'rb') as f:
 with open(matrix_path, 'rb') as f:
     X = pickle.load(f)
 
+# Защита от несовпадения размеров, если корпус менялся
+if X.shape[0] != num_rows:
+    print("[ВНИМАНИЕ] Размер матрицы X не совпадает с размером датасета. Рекомендуется перезапустить 03_lsa.py. Продолжаем...")
+
 num_features = X.shape[1]
 plot_dir = os.path.join(PLOTS_DIR, 'k_analysis')
 os.makedirs(plot_dir, exist_ok=True)
@@ -55,17 +75,17 @@ recon_errors = []
 silhouettes = []
 f1_scores = []
 
-print(f"Запуск анализа для {num_rows} строк. Диапазон k: 2 - {max_possible_k}")
+print(f"Запуск анализа для {num_rows} строк (4 макрокласса). Диапазон k: 2 - {max_possible_k}")
 
 for k in k_range:
-    # 1. Reconstruction Error (на полной матрице)
+    # 1. Reconstruction Error
     svd = TruncatedSVD(n_components=k, random_state=42)
     X_lsa = svd.fit_transform(X)
     X_reconstructed = svd.inverse_transform(X_lsa)
     error = norm(X - X_reconstructed, 'fro')
     recon_errors.append(error)
     
-    # 2. Silhouette (на полной матрице)
+    # 2. Silhouette
     try:
         if len(np.unique(y_category)) > 1:
             sil = silhouette_score(X_lsa, y_category)
@@ -76,7 +96,7 @@ for k in k_range:
         sil = np.nan
     silhouettes.append(sil)
     
-    # 3. F1-Score (БЕЗ УТЕЧКИ: TF-IDF обучается внутри фолдов)
+    # 3. F1-Score (без утечки)
     try:
         clf = LogisticRegression(max_iter=1000, random_state=42, class_weight='balanced')
         pipeline = make_pipeline(
@@ -84,7 +104,7 @@ for k in k_range:
                 ngram_range=(1, 2), 
                 token_pattern=r'(?u)\b\w+\b',
                 stop_words=final_stop_words,
-                min_df=1 # Полный словарь для поиска k*
+                min_df=1
             ),
             TruncatedSVD(n_components=k, random_state=42), 
             clf
@@ -138,7 +158,7 @@ ax2.tick_params(axis='y', labelcolor=color2)
 if knee_f1:
     ax2.axvline(x=knee_f1, color='tab:orange', linestyle=':', alpha=0.5, label='Локоть F1')
 
-plt.title(f'Зависимость метрик от k\nСтрок: {num_rows} | k: 2-{max_possible_k}', fontsize=14)
+plt.title(f'Зависимость метрик от k (4 класса)\nСтрок: {num_rows} | k: 2-{max_possible_k}', fontsize=14)
 plt.grid(True, alpha=0.3)
 lines1, labels1 = ax1.get_legend_handles_labels()
 lines2, labels2 = ax2.get_legend_handles_labels()

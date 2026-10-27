@@ -10,9 +10,12 @@ from sklearn.metrics import classification_report, confusion_matrix, f1_score, m
 import os
 from datetime import datetime
 import sys
+from collections import Counter
+from matplotlib.patches import Patch
+from matplotlib.lines import Line2D
 
 # ============================================================
-# НАСТРОЙКИ ЭКСПЕРИМЕНТА
+# НАСТРОЙКИ ЭКСПЕРИМЕНТА (4 КЛАССА, TF-IDF, БЕЗ MAX_WEIGHT)
 # ============================================================
 ENABLE_RULES = False
 USE_CASE_ID = True
@@ -20,11 +23,11 @@ N_SPLITS = 5
 BALANCE_MODE = 'custom_smooth'
 
 USE_SVD = False
-K_STAR = 73
+K_STAR = 73 # Игнорируется, если USE_SVD = False
 
 WEIGHT_BREAK_1 = 0.6
 WEIGHT_BREAK_2 = 1.0
-MAX_WEIGHT = 2.0
+# MAX_WEIGHT убран, так как мы отказались от потолка
 
 N_BOOT = 1000
 N_BOOT_PER_CLASS = 500
@@ -34,13 +37,28 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 PLOTS_DIR = os.path.join(BASE_DIR, 'plots')
 
-# --- 1. ЗАГРУЗКА ---
+# --- 1. ЗАГРУЗКА И МАППИНГ ---
 corpus_path = os.path.join(DATA_DIR, 'corpus_preprocessed.csv')
 if not os.path.exists(corpus_path):
     print("[ОШИБКА] corpus_preprocessed.csv не найден. Запустите этап 2.")
     sys.exit(1)
 
 df = pd.read_csv(corpus_path, sep=';', encoding='utf-8-sig', keep_default_na=False)
+
+# МАППИНГ 16 КЛАССОВ В 4 МАКРОКАТЕГОРИИ
+MACRO_MAPPING = {
+    'военная_угроза': 'угроза_военная',
+    'техногенная_угроза': 'угроза_техногенная',
+    'травма': 'угроза_общая', 'погибший': 'угроза_общая',
+    'природная_угроза': 'угроза_общая', 'животная_угроза': 'угроза_общая',
+    'заблудился': 'угроза_общая', 'потерялся': 'угроза_общая',
+    'нет_припасов': 'угроза_общая', 'техническая_неисправность': 'угроза_общая', 
+    'погода': 'не_угроза', 'позиция': 'не_угроза',
+    'статус_группы': 'не_угроза', 'проверка_связи': 'не_угроза',
+    'запрос_информации': 'не_угроза', 'запрос_маршрута': 'не_угроза'
+}
+df['intent'] = df['intent'].map(MACRO_MAPPING)
+df = df.dropna(subset=['intent'])
 
 def load_int(filename, default=None):
     try:
@@ -49,7 +67,7 @@ def load_int(filename, default=None):
     except Exception:
         if default is not None:
             return default
-        print(f"[ОШИБКА] Файл {filename} не найден. Запустите предыдущие этапы.")
+        print(f"[ОШИБКА] Файл {filename} не найден.")
         sys.exit(1)
 
 MIN_DF = load_int('best_min_df.txt')
@@ -59,7 +77,7 @@ cv_mode = "С case_id (честная CV)" if USE_CASE_ID else "БЕЗ case_id (
 print(f"Параметры: min_df* = {MIN_DF}" + (f", k* = {K_STAR}" if USE_SVD else ""))
 print(f"Архитектура: {arch_name}")
 print(f"Режим CV: {cv_mode} | Фолдов: {N_SPLITS}")
-print(f"Балансировка: {BALANCE_MODE} | Коридор: piecewise [{WEIGHT_BREAK_1}->{WEIGHT_BREAK_1}, {WEIGHT_BREAK_2}->1.2, cap={MAX_WEIGHT}]")
+print(f"Балансировка: {BALANCE_MODE} | Градиент: [{WEIGHT_BREAK_1}->{WEIGHT_BREAK_1}, {WEIGHT_BREAK_2}->1.2, без потолка]")
 
 # --- 2. ФИЛЬТРАЦИЯ ---
 df_real_all = df[df['is_synthetic'] == 0]
@@ -68,7 +86,6 @@ valid_classes = counts[counts >= 2].index
 df_valid = df[df['intent'].isin(valid_classes)].copy()
 
 if 'case_id' not in df_valid.columns:
-    print("[!] ВНИМАНИЕ: case_id не найден, принудительно включаем USE_CASE_ID = False")
     USE_CASE_ID = False
     df_valid['case_id'] = 'missing_case'
 else:
@@ -86,13 +103,12 @@ stop_words = load_words('stop_words.txt')
 keep_words = load_words('keep_words.txt')
 final_stop_words = [word for word in stop_words if word not in keep_words]
 
+# НОВЫЕ ВЕСА ДЛЯ 4 КЛАССОВ
 WEIGHTS = {
-    'погибший': 0.8, 'военная_угроза': 1.0, 'техногенная_угроза': 0.95,
-    'природная_угроза': 0.9, 'травма': 0.75, 'потерялся': 0.7,
-    'заблудился': 0.7, 'животная_угроза': 0.7, 'нет_припасов': 0.7,
-    'техническая_неисправность': 0.5, 'статус_группы': 0.2,
-    'позиция': 0.2, 'погода': 0.2, 'запрос_маршрута': 0.1,
-    'запрос_информации': 0.1, 'проверка_связи': 0.1
+    'угроза_военная': 0.8,
+    'угроза_техногенная': 0.8,
+    'угроза_общая': 1.0,
+    'не_угроза': 0.2
 }
 
 def calc_cwr(y_true, y_pred, weights):
@@ -212,13 +228,16 @@ for fold, (train_df, test_df) in enumerate(fold_data):
         for cls, count in intent_counts.items():
             cwr_w = WEIGHTS.get(cls, 0.1)
             raw_weight = np.sqrt(max_count / count) * cwr_w
+            
+            # Плавный градиент без верхнего потолка
             if raw_weight < WEIGHT_BREAK_1:
                 final_weight = WEIGHT_BREAK_1 + (raw_weight / WEIGHT_BREAK_1) * (WEIGHT_BREAK_2 - WEIGHT_BREAK_1)
             elif raw_weight < WEIGHT_BREAK_2:
                 final_weight = WEIGHT_BREAK_2 + ((raw_weight - WEIGHT_BREAK_1) / (WEIGHT_BREAK_2 - WEIGHT_BREAK_1)) * 0.2
             else:
                 final_weight = raw_weight
-            cw_intent[cls] = min(final_weight, MAX_WEIGHT)
+                
+            cw_intent[cls] = final_weight
         cw_urgency = 'balanced'
     else:
         cw_intent = BALANCE_MODE
@@ -232,11 +251,12 @@ for fold, (train_df, test_df) in enumerate(fold_data):
     clf_urgency.fit(X_train_ready, train_df['urgency'])
     y_pred_urgency_before = clf_urgency.predict(X_test_ready)
     y_pred_urgency_after = y_pred_urgency_before.copy()
+    
     if ENABLE_RULES:
         for idx, (pred_intent, pred_urg) in enumerate(zip(y_pred_intent, y_pred_urgency_before)):
-            if pred_intent in ['военная_угроза', 'техногенная_угроза', 'погибший']:
+            if pred_intent in ['угроза_военная', 'угроза_техногенная']:
                 if pred_urg < 4: y_pred_urgency_after[idx] = 4
-            elif pred_intent in ['травма', 'природная_угроза', 'животная_угроза', 'потерялся']:
+            elif pred_intent in ['угроза_общая']:
                 if pred_urg < 3: y_pred_urgency_after[idx] = 3
 
     fold_true_int = test_df['intent'].values
@@ -328,7 +348,7 @@ cond_acc = accuracy_score(oof_true_urgency[correct_mask], oof_pred_urgency_after
 cond_acc_n = int(correct_mask.sum())
 
 print("\n" + "="*70)
-print(f"РЕЗУЛЬТАТЫ ВАЛИДАЦИИ ({'LSA' if USE_SVD else 'TF-IDF'})")
+print(f"РЕЗУЛЬТАТЫ ВАЛИДАЦИИ (4 КЛАССА, TF-IDF)")
 print("="*70)
 print(f"1. F1_intent (Macro):              {f1_int:.3f}")
 print(f"2. F1_urgency (до правил):         {f1_urg_before:.3f}")
@@ -380,13 +400,13 @@ val_dir = os.path.join(PLOTS_DIR, 'validation')
 os.makedirs(val_dir, exist_ok=True)
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 arch_str = "LSA" if USE_SVD else "TFIDF"
-mode_str = f"case_id_{BALANCE_MODE}_{arch_str}"
+mode_str = f"case_id_{BALANCE_MODE}_{arch_str}_macro4"
 
-# === ГРАФИК №1: Матрица ошибок по интентам (как было) ===
-plt.figure(figsize=(14, 12))
+# === ГРАФИК №1: Матрица ошибок по интентам ===
+plt.figure(figsize=(10, 8)) # Уменьшили размер, так как классов теперь 4
 sns.heatmap(cm_intent, annot=True, fmt='d', cmap='Blues',
             xticklabels=labels_test, yticklabels=labels_test)
-plt.title(f'Матрица ошибок (Intent) [Out-of-Fold, {N_SPLITS} фолдов]\n'
+plt.title(f'Матрица ошибок (4 макрокласса) [Out-of-Fold, {N_SPLITS} фолдов]\n'
           f'Архитектура: {arch_str} | Строк: {len(oof_true_intent)}')
 plt.ylabel('Истинный класс')
 plt.xlabel('Предсказанный класс')
@@ -436,8 +456,7 @@ else:
 print(f"Матрица ошибок (intent) сохранена: {cm_file}")
 print(f"Матрица ошибок (urgency) сохранена: {cm_urg_file}")
 
-# === ГРАФИК №3: Per-class F1 с 95% CI (отдельный, с легендой-описанием) ===
-from collections import Counter
+# === ГРАФИК №3: Per-class F1 с 95% CI ===
 true_counts = Counter(oof_true_intent)
 per_class_rows = []
 for i, cls in enumerate(labels_test):
@@ -449,7 +468,6 @@ for i, cls in enumerate(labels_test):
         'lo': lo_per_class[i],
         'hi': hi_per_class[i],
     })
-# Сортировка по F1 (по возрастанию, чтобы худшие были снизу)
 per_class_rows.sort(key=lambda r: r['f1'])
 
 classes_sorted = [r['class'] for r in per_class_rows]
@@ -458,12 +476,10 @@ lo_sorted = np.array([r['lo'] for r in per_class_rows])
 hi_sorted = np.array([r['hi'] for r in per_class_rows])
 sup_sorted = np.array([r['support'] for r in per_class_rows])
 
-err_lower = f1_sorted - lo_sorted
-err_upper = hi_sorted - f1_sorted
-err_lower = np.clip(err_lower, 0, None)
-err_upper = np.clip(err_upper, 0, None)
+err_lower = np.clip(f1_sorted - lo_sorted, 0, None)
+err_upper = np.clip(hi_sorted - f1_sorted, 0, None)
 
-fig, ax = plt.subplots(figsize=(14, 10))
+fig, ax = plt.subplots(figsize=(12, 6))
 y_pos = np.arange(len(classes_sorted))
 colors = plt.cm.RdYlGn(f1_sorted)
 bars = ax.barh(y_pos, f1_sorted, xerr=[err_lower, err_upper],
@@ -482,42 +498,20 @@ ax.axvline(weighted_f1, color='darkgreen', linestyle=':', linewidth=1.5,
 for i, (f1_v, s) in enumerate(zip(f1_sorted, sup_sorted)):
     ax.text(min(f1_v + 0.01, 1.02), i, f"{f1_v:.2f}", va='center', fontsize=9)
 
-ax.set_title(f'F1-score по классам с 95% доверительными интервалами\n'
-             f'Архитектура: {arch_str} | Out-of-Fold, {N_SPLITS} фолдов | '
-             f'{len(oof_true_intent)} строк, {len(classes_sorted)} классов',
+ax.set_title(f'F1-score по 4 макроклассам с 95% доверительными интервалами\n'
+             f'Архитектура: {arch_str} | Out-of-Fold, {N_SPLITS} фолдов',
              fontsize=13, pad=12)
 
-# Основная легенда (условные обозначения)
-legend_handles, legend_labels = ax.get_legend_handles_labels()
-# Добавим "искусственный" элемент для описания усов
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 bar_patch = Patch(facecolor='lightgreen', edgecolor='black', label='F1-score класса')
 err_line = Line2D([0], [0], color='black', marker='|', linestyle='none',
                   markersize=10, markeredgewidth=2,
                   label='95% bootstrap CI (усы)')
-legend_handles.extend([bar_patch, err_line])
-legend_labels.extend(['F1-score класса (цвет = уровень качества)',
-                      '95% bootstrap CI (усы)'])
-ax.legend(legend_handles, legend_labels, loc='lower right', fontsize=9, framealpha=0.95)
+ax.legend(handles=[bar_patch, err_line, Line2D([0], [0], color='navy', linestyle='--', label='Macro F1'), Line2D([0], [0], color='darkgreen', linestyle=':', label='Weighted F1')], 
+          loc='lower right', fontsize=9)
 
-# Блок-описание под графиком
-description = (
-    "КАК ЧИТАТЬ ГРАФИК:\n"
-    "• Каждый бар — F1-score (Macro) отдельного класса интента на Out-of-Fold выборке.\n"
-    "• Цвет бара: красный = низкое качество (<0.4), жёлтый = среднее (0.4–0.6), зелёный = высокое (>0.6).\n"
-    "• Усы (чёрные вертикальные отрезки) — 95% доверительный интервал, полученный bootstrap-ресемплингом.\n"
-    "  Широкие усы = статистически ненадёжная оценка (обычно из-за малого support класса).\n"
-    "• n = support класса (число истинных объектов в OOF).\n"
-    "• Синяя пунктирная линия — общий F1_intent (Macro) по всем классам.\n"
-    "• Зелёная точечная линия — среднее F1 по классам (не взвешенное по support).\n"
-    "• Классы отсортированы по возрастанию F1: худшие — снизу, лучшие — сверху."
-)
-plt.subplots_adjust(bottom=0.22)
-fig.text(0.01, 0.01, description, ha='left', va='bottom',
-         fontsize=9, family='monospace',
-         bbox=dict(boxstyle='round,pad=0.6', facecolor='#f5f5f5', edgecolor='gray'))
-
+plt.tight_layout()
 per_class_file = os.path.join(val_dir, f'per_class_f1_with_ci_{mode_str}_{timestamp}.png')
 plt.savefig(per_class_file, dpi=200, bbox_inches='tight')
 plt.close()
@@ -527,10 +521,10 @@ print(f"Per-class F1 с CI сохранён: {per_class_file}")
 report_file = os.path.join(val_dir, f'report_{mode_str}_{timestamp}.txt')
 with open(report_file, 'w', encoding='utf-8') as f:
     f.write(f"Параметры: min_df={MIN_DF}" + (f", k*={K_STAR}" if USE_SVD else "") + "\n")
-    f.write(f"Архитектура: {arch_name}\n")
+    f.write(f"Архитектура: {arch_name} (4 макрокласса)\n")
     f.write(f"Режим CV: {cv_mode} | Фолдов: {N_SPLITS}\n")
     f.write(f"Балансировка: {BALANCE_MODE}\n")
-    f.write(f"Коридор весов: piecewise [{WEIGHT_BREAK_1}->{WEIGHT_BREAK_1}, {WEIGHT_BREAK_2}->1.2, cap={MAX_WEIGHT}]\n")
+    f.write(f"Градиент весов: [{WEIGHT_BREAK_1}->{WEIGHT_BREAK_1}, {WEIGHT_BREAK_2}->1.2, без потолка]\n")
     f.write(f"Правила пост-процессинга (urgency): {'ВКЛ' if ENABLE_RULES else 'ВЫКЛ'}\n")
     f.write(f"Всего строк (Out-of-Fold): {len(oof_true_intent)}\n\n")
 
@@ -560,7 +554,7 @@ with open(report_file, 'w', encoding='utf-8') as f:
     f.write("\n")
 
     f.write("=== СВОДКА МЕТРИК (Out-of-Fold, по всей выборке) ===\n")
-    f.write(f"F1_intent: {f1_int:.3f}\n")
+    f.write(f"F1_intent (Macro): {f1_int:.3f}\n")
     f.write(f"F1_urgency (до правил): {f1_urg_before:.3f}\n")
     f.write(f"F1_urgency (после правил): {f1_urg_after:.3f}\n")
     f.write(f"MAE_urgency (до правил): {mae_before:.3f}\n")
@@ -576,13 +570,13 @@ with open(report_file, 'w', encoding='utf-8') as f:
     f.write(f"CWR:               [{ci_cwr[0]:.3f}; {ci_cwr[1]:.3f}]\n\n")
 
     f.write(f"=== F1 ПО КЛАССАМ + 95% CI (bootstrap, {N_BOOT_PER_CLASS} итераций) ===\n")
-    f.write(f"{'Класс':<28} | {'F1':>6} | {'support':>8} | 95% CI\n")
+    f.write(f"{'Макрокласс':<28} | {'F1':>6} | {'support':>8} | 95% CI\n")
     f.write("-" * 70 + "\n")
     for r in sorted(per_class_rows, key=lambda x: -x['f1']):
         f.write(f"{r['class']:<28} | {r['f1']:>6.3f} | {r['support']:>8d} | [{r['lo']:.3f}; {r['hi']:.3f}]\n")
     f.write("\n")
 
-    f.write("=== МЕТРИКИ ИНТЕНТОВ (Out-of-Fold) ===\n")
+    f.write("=== МЕТРИКИ МАКРОКЛАССОВ (Out-of-Fold) ===\n")
     f.write(report_intent + "\n\n")
     f.write("=== МЕТРИКИ URGENCY (ПОСЛЕ ПРАВИЛ, Out-of-Fold) ===\n")
     f.write(report_urg_after + "\n")
