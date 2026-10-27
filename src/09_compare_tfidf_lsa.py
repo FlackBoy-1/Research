@@ -12,12 +12,12 @@ from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.metrics import f1_score, confusion_matrix, accuracy_score
 
 # ============================================================
-# НАСТРОЙКИ
+# НАСТРОЙКИ (4 КЛАССА)
 # ============================================================
 K_STAR = 73
-MIN_DF = 7
-MIN_WEIGHT = 0.6
-MAX_WEIGHT = 2.0
+MIN_DF = 4  # Для 4 классов мы зафиксировали min_df=4
+WEIGHT_BREAK_1 = 0.6
+WEIGHT_BREAK_2 = 1.0
 # ============================================================
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -41,17 +41,32 @@ def calc_cwr(y_true, y_pred, weights):
 
 print("Загрузка данных...")
 df = pd.read_csv(os.path.join(DATA_DIR, 'corpus_preprocessed.csv'), sep=';', encoding='utf-8-sig', keep_default_na=False)
+
+# --- МАППИНГ 16 КЛАССОВ В 4 МАКРОКАТЕГОРИИ ---
+MACRO_MAPPING = {
+    'военная_угроза': 'угроза_военная',
+    'техногенная_угроза': 'угроза_техногенная',
+    'травма': 'угроза_общая', 'погибший': 'угроза_общая',
+    'природная_угроза': 'угроза_общая', 'животная_угроза': 'угроза_общая',
+    'заблудился': 'угроза_общая', 'потерялся': 'угроза_общая',
+    'нет_припасов': 'угроза_общая', 'техническая_неисправность': 'угроза_общая', 
+    'погода': 'не_угроза', 'позиция': 'не_угроза',
+    'статус_группы': 'не_угроза', 'проверка_связи': 'не_угроза',
+    'запрос_информации': 'не_угроза', 'запрос_маршрута': 'не_угроза'
+}
+df['intent'] = df['intent'].map(MACRO_MAPPING)
+df = df.dropna(subset=['intent'])
+
 stop_words = load_words('stop_words.txt')
 keep_words = load_words('keep_words.txt')
 final_stop_words = [word for word in stop_words if word not in keep_words]
 
+# НОВЫЕ ВЕСА ДЛЯ 4 КЛАССОВ
 WEIGHTS = {
-    'погибший': 0.8, 'военная_угроза': 1.0, 'техногенная_угроза': 0.95,
-    'природная_угроза': 0.9, 'травма': 0.75, 'потерялся': 0.7,
-    'заблудился': 0.7, 'животная_угроза': 0.7, 'нет_припасов': 0.7,
-    'техническая_неисправность': 0.5, 'статус_группы': 0.2,
-    'позиция': 0.2, 'погода': 0.2, 'запрос_маршрута': 0.1,
-    'запрос_информации': 0.1, 'проверка_связи': 0.1
+    'угроза_военная': 0.8,
+    'угроза_техногенная': 0.8,
+    'угроза_общая': 1.0,
+    'не_угроза': 0.2
 }
 
 # Подготовка данных
@@ -108,10 +123,14 @@ def run_pipeline(use_svd=True):
         cw_intent = {}
         for cls, count in intent_counts.items():
             raw_weight = np.sqrt(max_count / count) * WEIGHTS.get(cls, 0.1)
-            if raw_weight < 0.6: final_weight = 0.6 + (raw_weight / 0.6) * 0.4
-            elif raw_weight < 1.0: final_weight = 1.0 + ((raw_weight - 0.6) / 0.4) * 0.2
-            else: final_weight = raw_weight
-            cw_intent[cls] = min(final_weight, MAX_WEIGHT)
+            # Плавный градиент без потолка (как в 08_validation.py)
+            if raw_weight < WEIGHT_BREAK_1:
+                final_weight = WEIGHT_BREAK_1 + (raw_weight / WEIGHT_BREAK_1) * (WEIGHT_BREAK_2 - WEIGHT_BREAK_1)
+            elif raw_weight < WEIGHT_BREAK_2:
+                final_weight = WEIGHT_BREAK_2 + ((raw_weight - WEIGHT_BREAK_1) / (WEIGHT_BREAK_2 - WEIGHT_BREAK_1)) * 0.2
+            else:
+                final_weight = raw_weight
+            cw_intent[cls] = final_weight
 
         clf = LogisticRegression(max_iter=1000, random_state=42, class_weight=cw_intent)
         clf.fit(X_train_ready, train_df['intent'])
@@ -140,7 +159,7 @@ def run_pipeline(use_svd=True):
     acc = accuracy_score(oof_true, oof_pred)
 
     return {
-        'name': 'LSA (k=73)' if use_svd else 'TF-IDF (min_df=7)',
+        'name': 'LSA (k=73)' if use_svd else 'TF-IDF (min_df=4)',
         'f1': f1,
         'cwr': cwr,
         'acc': acc,
@@ -159,9 +178,9 @@ tfidf_res = run_pipeline(use_svd=False)
 # ВЫВОД В КОНСОЛЬ
 # ============================================================
 print("\n" + "="*70)
-print("РЕЗУЛЬТАТЫ ЭКСПЕРИМЕНТА Ж: СРАВНЕНИЕ АРХИТЕКТУР")
+print("РЕЗУЛЬТАТЫ ЭКСПЕРИМЕНТА Ж (4 КЛАССА): СРАВНЕНИЕ АРХИТЕКТУР")
 print("="*70)
-print(f"{'Параметр':<30} | {'LSA (k=73)':<15} | {'TF-IDF (min_df=7)':<15} | Разница")
+print(f"{'Параметр':<30} | {'LSA (k=73)':<15} | {'TF-IDF (min_df=4)':<15} | Разница")
 print("-" * 70)
 print(f"{'F1_intent (Macro)':<30} | {lsa_res['f1']:.4f}          | {tfidf_res['f1']:.4f}          | {tfidf_res['f1'] - lsa_res['f1']:+.4f} (TF-IDF лучше)")
 print(f"{'CWR':<30} | {lsa_res['cwr']:.4f}          | {tfidf_res['cwr']:.4f}          | {tfidf_res['cwr'] - lsa_res['cwr']:+.4f} (TF-IDF лучше)")
@@ -196,7 +215,7 @@ x = np.arange(len(metrics_names))
 width = 0.35
 
 bars1 = ax.bar(x - width/2, lsa_vals, width, label='LSA (k=73)', color='#d9534f', edgecolor='black', alpha=0.85)
-bars2 = ax.bar(x + width/2, tfidf_vals, width, label='TF-IDF (min_df=7)', color='#5cb85c', edgecolor='black', alpha=0.85)
+bars2 = ax.bar(x + width/2, tfidf_vals, width, label='TF-IDF (min_df=4)', color='#5cb85c', edgecolor='black', alpha=0.85)
 
 for bars in [bars1, bars2]:
     for bar in bars:
@@ -221,7 +240,7 @@ tfidf_res_vals = [tfidf_res['size_kb'], tfidf_res['train_time'], tfidf_res['infe
 x = np.arange(len(resources_names))
 
 bars1 = ax.bar(x - width/2, lsa_res_vals, width, label='LSA (k=73)', color='#d9534f', edgecolor='black', alpha=0.85)
-bars2 = ax.bar(x + width/2, tfidf_res_vals, width, label='TF-IDF (min_df=7)', color='#5cb85c', edgecolor='black', alpha=0.85)
+bars2 = ax.bar(x + width/2, tfidf_res_vals, width, label='TF-IDF (min_df=4)', color='#5cb85c', edgecolor='black', alpha=0.85)
 
 for bars, vals in [(bars1, lsa_res_vals), (bars2, tfidf_res_vals)]:
     for bar, val in zip(bars, vals):
@@ -238,8 +257,8 @@ ax.set_title('Вычислительные ресурсы (меньше — лу
 ax.legend(loc='upper right', fontsize=10)
 ax.grid(axis='y', alpha=0.3, which='both')
 
-fig.suptitle(f'Сравнение архитектур: LSA (k=73) vs TF-IDF без SVD (min_df=7)\n'
-             f'Единые условия: StratifiedGroupKFold × 5, case_id, custom_smooth, {len(df_valid)} строк',
+fig.suptitle(f'Сравнение архитектур: LSA (k=73) vs TF-IDF без SVD (min_df=4)\n'
+             f'Прикладная 4-классовая таксономия | StratifiedGroupKFold × 5, case_id',
              fontsize=13)
 
 # Описание под графиком
@@ -257,7 +276,7 @@ fig.text(0.01, 0.01, description, ha='left', va='bottom',
          bbox=dict(boxstyle='round,pad=0.6', facecolor='#f5f5f5', edgecolor='gray'))
 
 ts = time.strftime("%Y-%m-%d_%H-%M-%S")
-compare_file = os.path.join(comp_dir, f'compare_lsa_vs_tfidf_{ts}.png')
+compare_file = os.path.join(comp_dir, f'compare_lsa_vs_tfidf_4classes_{ts}.png')
 plt.savefig(compare_file, dpi=200, bbox_inches='tight')
 plt.close()
-print(f"\nСравнительный график сохранён: {compare_file}")
+print(f"\nСравнительный график (4 класса) сохранён: {compare_file}")
